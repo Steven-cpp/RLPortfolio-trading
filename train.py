@@ -1,6 +1,5 @@
 from tabnanny import verbose
 import talib
-import joblib
 import numpy as np
 import gym
 from gym import spaces
@@ -10,7 +9,6 @@ import pandas as pd
 
 from multi_stock_trading_env import MultiStockTradingEnv
 from stable_baselines3 import PPO, A2C, SAC, DDPG
-from gat_capsule_policy import GATActorCriticPolicy
 from custom_rl_policy import CustomActorCriticPolicy
 CUDA_LAUNCH_BLOCKING=1 
 
@@ -107,7 +105,7 @@ num_assets = 0
 
 names = []
 
-data_files = glob.iglob(f'.\{directory}/*')
+data_files = glob.iglob(f'./{directory}/*')
 
 for filename in data_files:
 
