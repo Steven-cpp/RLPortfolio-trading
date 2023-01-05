@@ -9,8 +9,12 @@ import pandas as pd
 
 from multi_stock_trading_env import MultiStockTradingEnv
 from stable_baselines3 import PPO, A2C, SAC, DDPG
-from custom_rl_policy import CustomActorCriticPolicy
+from custom_rl_policy import CustomActorCriticPolicy, CustomNetwork
 CUDA_LAUNCH_BLOCKING=1 
+
+scalers = []
+name = "MultiStockTrader"
+indicators = ['feature_%d' %i for i in range(11)]
 
 def add_features(tic_df):
 
@@ -88,150 +92,110 @@ def add_features(tic_df):
 
     return tic_df
 
-directory = 'history_data'
+"""
+Read history indicators from `dir`
 
-indicators = ['open', 'high', 'low', 'close', 'volume', 'ToD', 'DoW',
-       'ret1min', 'ret2min', 'ret3min', 'ret4min', 'ret5min', 'ret6min',
-       'ret7min', 'ret8min', 'ret9min', 'ret10min', 'sma', '5sma', '20sma',
-       'bb_upper', 'bb_middle', 'bb_lower', 'bb_sell', 'bb_buy', 'bb_squeeze',
-       'mom', 'adx', 'mfi', 'rsi', 'trange', 'bop', 'cci', 'STOCHRSI', 'slowk',
-       'slowd', 'macd', 'macdsignal', 'macdhist', 'NATR', 'KAMA', 'MAMA',
-       'FAMA', 'MAMA_buy', 'KAMA_buy', 'sma_buy', 'maco', 'rsi_buy',
-       'rsi_sell', 'macd_buy_sell']
+Parameters
+----------
+* fname : str
+    证券历史技术指标所在的文件
+"""
+def readHistory(fname='public_data/train.csv'):
+        dfs = pd.DataFrame()
+        num_assets = 0
+        names = []
+        # data_files = glob.iglob(f'./{dir}/*')
 
-dfs = pd.DataFrame()
-
-num_assets = 0
-
-names = []
-
-data_files = glob.iglob(f'./{directory}/*')
-
-for filename in data_files:
-
-        df = pd.read_csv(filename)
-
-        df['datetime'] = pd.to_datetime(df['datetime'])
-
+        df = pd.read_csv(fname)
         name = df['name'].iloc[0]
-
         names.append(name)
-
         # Adding the Time of Day and Day of Week features
-
-        df['ToD'] = df['datetime'].dt.hour + df['datetime'].dt.minute/60
-        df['DoW'] = df['datetime'].dt.weekday/6
-        df.sort_values(['timestamp'], inplace=True)
-
-
         updated_df = add_features(df)
-
         updated_df['datetime'] = pd.to_datetime(updated_df['datetime'])
         updated_df = df.set_index(pd.DatetimeIndex(updated_df['datetime']))
-
-
         updated_df.drop(['timestamp','name','token'], axis=1, inplace=True)
-
         updated_df.replace([np.inf, -np.inf], 0, inplace=True)
-
         dfs = pd.concat([dfs,updated_df], axis=1)
-
         num_assets += 1
 
-dfs.interpolate(method='pad', limit_direction='forward', inplace=True)
+        print(dfs.columns)
+        cols_per_asset = int(len(dfs.columns)/num_assets)
+        df_list = []
+        price_df = pd.DataFrame()
 
-print(dfs.columns)
+        for i in range(num_assets):
+                df = dfs.iloc[:,i*cols_per_asset:i*cols_per_asset+cols_per_asset]
+                #print(df.columns)
+                df.drop(['datetime'], axis=1, inplace=True)
+                price_df[names[i]] = df['close']
+                df_list.append(df)
+        return df_list, price_df, num_assets, cols_per_asset - 1 
 
-cols_per_asset = int(len(dfs.columns)/num_assets)
+def trainRL():
+        df_list, price_df, num_assets, cols_per_asset = readHistory()
+        env = MultiStockTradingEnv(df_list,
+                price_df,
+                num_stocks=num_assets,
+                initial_amount=1000000,
+                trade_cost=0,
+                num_features=cols_per_asset,
+                window_size=12,
+                frame_bound = (12,len(price_df)-1500),
+                tech_indicator_list=indicators)
+        env.process_data()
+        model = PPO(CustomActorCriticPolicy, env, verbose=2,tensorboard_log='tb_logs', batch_size=256)
+        # model = PPO(CustomNetwork, env, verbose=2,tensorboard_log='tb_logs', batch_size=256)
+        # model = PPO('MlpPolicy', env, verbose=2,tensorboard_log='tb_logs', batch_size=256)
+        # model = PPO(GATActorCriticPolicy, env, verbose=2,tensorboard_log='tb_logs', batch_size=16)
 
-df_list = []
-price_df = pd.DataFrame()
+        model.learn(total_timesteps=1000)
+        plt.figure(figsize=(16, 6))
+        model.save("saved_models/" + name)
+        scalers = env.scalers
+        print(len(scalers))
 
-for i in range(num_assets):
-    df = dfs.iloc[:,i*cols_per_asset:i*cols_per_asset+cols_per_asset]
-    #print(df.columns)
-    df.drop(['datetime'], axis=1, inplace=True)
-    price_df[names[i]] = df['close']
-    df_list.append(df)
+if __name__ == "__main__":
+        df_list, price_df, num_assets, cols_per_asset = readHistory()
+        trainRL()
+        env = MultiStockTradingEnv(df_list,
+                price_df,
+                num_stocks=num_assets,
+                initial_amount=1000000,
+                trade_cost=0,
+                num_features=cols_per_asset,
+                window_size=12,
+                scalers=scalers,
+                frame_bound = (len(price_df)-1500,len(price_df)),
+                tech_indicator_list=indicators)
 
-cols_per_asset -= 1
+        model = PPO.load("saved_models/" + name)
+        env.process_data()
+        obs = env.reset()
+        count = 0
+        total_rewards = 0
+        infer_rewards = []
+        while True: 
+                # obs = obs[np.newaxis, ...]
+                action, _states = model.predict(obs)
+                count += 1
+                obs, rewards, done, info = env.step(action)
+                # print(action, rewards)
+                total_rewards += rewards
 
+                infer_rewards.append(rewards)
+                if done:
+                        print("info", count,info)
+                        break
 
-env = MultiStockTradingEnv(df_list,
-        price_df,
-        num_stocks=num_assets,
-        initial_amount=1000000,
-        trade_cost=0,
-        num_features=cols_per_asset,
-        window_size=12,
-        frame_bound = (12,len(price_df)-1500),
-        tech_indicator_list=indicators)
+        print("Total profit: \n", sum(infer_rewards))
 
-prices, features = env.process_data()
+        infer_steps = price_df.index[len(price_df)-len(infer_rewards):len(price_df)]#np.array(list(range(len(infer_rewards))))
+        infer_rewards = np.cumsum(np.array(infer_rewards))
+        sensex_values = env.representative[-len(infer_steps):]
 
-
-model = PPO(CustomActorCriticPolicy, env, verbose=2,tensorboard_log='tb_logs', batch_size=256)
-# model = PPO('MlpPolicy', env, verbose=2,tensorboard_log='tb_logs', batch_size=256)
-
-# model = PPO(GATActorCriticPolicy, env, verbose=2,tensorboard_log='tb_logs', batch_size=16)
-
-model.learn(total_timesteps=1000)
-
-plt.figure(figsize=(16, 6))
-# env.render_all()
-# plt.savefig('rewards.jpg')
-
-name="MultiStockTrader"
-
-model.save("saved_models/"+name)
-
-scalers = env.scalers
-
-del model
-
-del env
-
-env = MultiStockTradingEnv(df_list,
-        price_df,
-        num_stocks=num_assets,
-        initial_amount=1000000,
-        trade_cost=0,
-        num_features=cols_per_asset,
-        window_size=12,
-        scalers=scalers,
-        frame_bound = (len(price_df)-1500,len(price_df)),
-        tech_indicator_list=indicators)
-
-model = PPO.load("saved_models/"+name)
-prices, features = env.process_data()
-obs = env.reset()
-count=0
-total_rewards = 0
-infer_rewards = []
-while True: 
-        # obs = obs[np.newaxis, ...]
-        action, _states = model.predict(obs)
-        count+=1
-        obs, rewards, done, info = env.step(action)
-        # print(action, rewards)
-        total_rewards += rewards
-
-        infer_rewards.append(rewards)
-        if done:
-                print("info", count,info)
-                break
-
-print("Total profit: \n", sum(infer_rewards))
-
-infer_steps = price_df.index[len(price_df)-len(infer_rewards):len(price_df)]#np.array(list(range(len(infer_rewards))))
-infer_rewards = np.cumsum(np.array(infer_rewards))
-sensex_values = env.representative[-len(infer_steps):]
-
-plt.title(name)
-plt.plot(infer_steps, infer_rewards, color="red", label='Profit')
-plt.plot(infer_steps, sensex_values, color="blue", label='Index')
-plt.legend(loc="upper left")
-plt.savefig('Infer_rewards.jpg')
-
-
+        plt.title(name)
+        plt.plot(infer_steps, infer_rewards, color="red", label='Profit')
+        plt.plot(infer_steps, sensex_values, color="blue", label='Index')
+        plt.legend(loc="upper left")
+        plt.savefig('Infer_rewards.jpg')
 
