@@ -109,7 +109,8 @@ class MultiStockTradingEnv(gym.Env):
         if self.representative:
             self.representative = self.price_df.loc[:, self.representative].to_numpy()[start:end]
         else:
-            self.representative = self.price_df.loc[:, 'SENSEX'].to_numpy()[start:end]
+            # 选取当天股票池中所有股票的均价作为参考指数
+            self.representative = np.average(self.price_df.to_numpy(), axis=1)[start:end]
         self.signal_features = np.array(signal_features)
         self._end_tick = len(self.prices)-1
         return self.prices, self.signal_features
@@ -172,16 +173,16 @@ class MultiStockTradingEnv(gym.Env):
 
         self.margin = self.reserve + sum(self.portfolio*current_prices)
 
-        #Normalize the portfolio positions for next step
+        # Normalize the portfolio positions for next step
         norm_margin_pos = (abs_portfolio_dist/sum(abs_portfolio_dist))*self.margin
 
-        #Calulate the money in the next positions
+        # Calulate the money in the next positions
         next_positions = np.sign(actions)*norm_margin_pos
 
-        #Change in money value of the positions
+        # Change in money value of the positions
         change_in_positions = next_positions - self._position
 
-        #actions to take in the market
+        # Actions to take in the market
         actions_in_market = np.divide(change_in_positions,current_prices_for_division).astype(int)
 
         new_portfolio = actions_in_market + self.portfolio
@@ -192,7 +193,7 @@ class MultiStockTradingEnv(gym.Env):
 
         profit = (new_pv + new_reserve) - (self.PortfolioValue + self.reserve)
 
-        # calculate the cost of each action in market
+        # Calculate the cost of each action in market
         cost = self.trade_cost*sum(abs(np.sign(actions_in_market)))
 
         # print(cost)
@@ -219,10 +220,9 @@ class MultiStockTradingEnv(gym.Env):
 
         self._position_history.append(self._position)
         observation = self._get_observation()
-        info = dict(
-            total_reward = self._total_reward,
-            total_profit = self._total_profit,
-        )
+        info = {'total_reward': self._total_reward,
+                'total_profit': self._total_profit,
+                'real_action': abs_portfolio_dist}
         self._update_history(info)
 
         if self.margin < 0:
