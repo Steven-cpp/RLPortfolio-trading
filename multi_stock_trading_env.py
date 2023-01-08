@@ -38,7 +38,7 @@ class MultiStockTradingEnv(gym.Env):
         frame_bound,
         scalers=None,
         tech_indicator_list=[],
-        reward_scaling=1e-5,
+        reward_scaling=1e-4,
         suppresention_rate=0.66,
         representative=None
     ):
@@ -48,7 +48,7 @@ class MultiStockTradingEnv(gym.Env):
         self.price_df = price_df
         self.initial_amount = initial_amount
         self.margin = initial_amount
-        self.portfolio = [0]*num_stocks
+        self.portfolio = [0] * num_stocks
         self.PortfolioValue = 0
         self.reserve = initial_amount
         self.trade_cost = trade_cost
@@ -58,6 +58,8 @@ class MultiStockTradingEnv(gym.Env):
         self.tech_indicators = tech_indicator_list
         self.window_size = window_size
         self.frame_bound = frame_bound
+        self.SCALE_CONST = 0.8
+        self.res_rate = [0.0] * num_stocks
 
         # spaces
         self.action_space = spaces.Box(low=-1, high=1, shape=(num_stocks,), dtype=np.float32)
@@ -130,11 +132,34 @@ class MultiStockTradingEnv(gym.Env):
         self._total_profit = 1.  # unit
         self._first_rendering = True
         self.history = {}
+        self.res_rate = [0.0] * self.assets
         return self._get_observation()
 
     def _update_profit(self, ):
         self._total_profit = (self.PortfolioValue+self.reserve)/self.initial_amount
 
+    def testStep(self, actions):
+        self._done = False
+        self._current_tick += 1
+
+        if self._current_tick == self._end_tick:
+            self._done = True
+
+        # 1. 处理 action, 仅保留`suppression_rate`限定个数的操作(前33%个)
+        #    并且正则化使得其总和为 < 1
+        delta_port = abs(actions)
+        N = int(np.round(delta_port.size * self.suppression_rate))
+        delta_port[np.argpartition(delta_port , kth=N)[:N]] = 0
+        delta_port = delta_port / sum(delta_port)
+        delta_port = np.sign(actions) * delta_port
+
+        # 2. 执行当前操作并更新当前持仓
+        self.res_rate += delta_port * self.SCALE_CONST
+
+        observation = self._get_observation()
+        return self.res_rate, self._done, observation
+
+        
 
     def step(self, actions):
         self._done = False
@@ -143,86 +168,70 @@ class MultiStockTradingEnv(gym.Env):
         if self._current_tick == self._end_tick:
             self._done = True
 
-
-        #Get the current prices
+        # Get the current prices
         current_prices = self.prices[self._current_tick]
 
-        #handling cases where current price is na and avoiding buying infinite 0 cost stocks
-
+        # Handling cases where current price is na and avoiding buying infinite 0 cost stocks
         current_prices[np.isnan(current_prices)] = 0
-
         current_prices_for_division = current_prices
-
         current_prices_for_division[current_prices_for_division == 0] = 1e9
 
-        #the absolute value distribution of next step portfolio
+        # The absolute value distribution of next step portfolio
         abs_portfolio_dist = abs(actions)
 
         # tol = abs_portfolio_dist.mean() #+ abs_portfolio_dist.std()
-
         # abs_portfolio_dist[abs_portfolio_dist < tol] = 1e-9
 
         # At any point in time we only trade for 33% of the stocks the model is most confident about
         # the scores for the rest are suppressed
 
         N = int(np.round(abs_portfolio_dist.size*self.suppression_rate))
-
         abs_portfolio_dist[np.argpartition(abs_portfolio_dist,kth=N)[:N]] = 0
-
-        # print(abs_portfolio_dist)
-
-        self.margin = self.reserve + sum(self.portfolio*current_prices)
+        self.margin = self.reserve + sum(self.portfolio * current_prices)
 
         # Normalize the portfolio positions for next step
         norm_margin_pos = (abs_portfolio_dist/sum(abs_portfolio_dist))*self.margin
-
         # Calulate the money in the next positions
-        next_positions = np.sign(actions)*norm_margin_pos
-
+        next_positions = np.sign(actions) * norm_margin_pos
         # Change in money value of the positions
         change_in_positions = next_positions - self._position
-
         # Actions to take in the market
         actions_in_market = np.divide(change_in_positions,current_prices_for_division).astype(int)
 
         new_portfolio = actions_in_market + self.portfolio
+        new_pv = sum(new_portfolio * current_prices)
 
-        new_pv = sum(new_portfolio*current_prices)
+        # 当前的持仓占比
+        self.res_rate = np.divide(new_portfolio * current_prices, self.initial_amount)
 
+        # 使用现金买入`action`指定的证券
         new_reserve = self.margin - new_pv
-
         profit = (new_pv + new_reserve) - (self.PortfolioValue + self.reserve)
 
         # Calculate the cost of each action in market
-        cost = self.trade_cost*sum(abs(np.sign(actions_in_market)))
-
-        # print(cost)
-
+        cost = self.trade_cost * sum(abs(np.sign(actions_in_market)))
         self._position = next_positions
-
         self.portfolio = new_portfolio
-
         self.PortfolioValue = new_pv
-
         self.reserve = new_reserve - cost
 
         # Calculate the total step reward - profit made this step
         step_reward = profit - cost
-
-        self._total_reward += self.reward_scaling*step_reward
-
+        if (len(self.rewards) < 10):
+            self._total_reward += self.reward_scaling * step_reward
+        else:
+            self._total_reward += self.reward_scaling * step_reward / np.std(self.rewards)
         self.rewards.append(self._total_reward)
         self.pvs.append(new_pv)
-
         self._update_profit()
-
         self._position = next_positions
-
         self._position_history.append(self._position)
+
         observation = self._get_observation()
         info = {'total_reward': self._total_reward,
                 'total_profit': self._total_profit,
-                'real_action': abs_portfolio_dist}
+                'res_rate': self.res_rate,
+                'margin': self.margin}
         self._update_history(info)
 
         if self.margin < 0:
@@ -231,6 +240,7 @@ class MultiStockTradingEnv(gym.Env):
         return observation, step_reward, self._done, info
 
     def _get_observation(self):
+        # 通过 current_tick 的自增来控制 obs
         return np.nan_to_num(self.signal_features[:,(self._current_tick-self.window_size+1):self._current_tick+1,:])
 
     def _update_history(self, info):
