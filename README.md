@@ -13,7 +13,7 @@
 
 本模型的实现主要依赖于 `Pytorch`, `stable baseline3`, `gym`, 并且使用 CPU 也可以进行训练.
 
-在安装好上述包后，只需要 run `python train.py` 即可.
+在安装好上述包后，只需要 run `python train.py` 即可. 
 
 
 ## 2. Trading Strategy Specification
@@ -41,3 +41,9 @@ self.observation_space =
 > 所以，在计算投资余额时，只需要简单的 $balance + sum(portfolio * current\_prices)$ 即可.
 
 在执行卖出/买入操作后，更新当前的现金余额 `reserve`，同时计算收益，最后更新所有相关的类变量。
+
+最优的模型在测试集上的表现如下图所示:
+
+![res_stable2](https://raw.githubusercontent.com/Steven-cpp/myPhotoSet/main/res_stable2.jpg)
+
+通过在前 1200 天上的数据进行训练，RL agent 在之后 800 天的收益率达到了 65%，超过了同期参考指数 60% 的收益率。同时总的持仓控制得当，交易策略偏向中性。
