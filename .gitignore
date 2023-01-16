@@ -1,5 +1,5 @@
 __pycache__
-saved_models
+*.zip
 tb_logs
 .DS_Store
 res
