@@ -192,7 +192,8 @@ class MultiStockTradingEnv(gym.Env):
         # Normalize the portfolio positions for next step
         norm_margin_pos = (abs_portfolio_dist/sum(abs_portfolio_dist))*self.margin
         # Calulate the money in the next positions
-        next_positions = np.sign(actions) * norm_margin_pos
+        # next_positions = np.sign(actions) * norm_margin_pos
+        next_positions = np.sign(actions) * self.initial_amount * self.SCALE_CONST # Match testStep
         # Change in money value of the positions
         change_in_positions = next_positions - self._position
         # Actions to take in the market

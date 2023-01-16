@@ -12,7 +12,7 @@ from stable_baselines3 import PPO, A2C, SAC, DDPG
 from custom_rl_policy import CustomActorCriticPolicy, CustomNetwork
 CUDA_LAUNCH_BLOCKING=1 
 
-name = "MultiStockTrader_stable"
+name = "MultiStockTrader_brave_new3"
 indicators = ['feature_%d' %i for i in range(11)]
 cols_per_asset = 11
 num_assets = 15
@@ -68,7 +68,7 @@ def trainRL():
     # model = PPO('MlpPolicy', env, verbose=2,tensorboard_log='tb_logs', batch_size=256)
     # model = PPO(GATActorCriticPolicy, env, verbose=2,tensorboard_log='tb_logs', batch_size=16)
 
-    model.learn(total_timesteps=8000)
+    model.learn(total_timesteps=9000)
     plt.figure(figsize=(16, 6))
     model.save("saved_models/" + name)
     scalers = env.scalers
@@ -109,6 +109,7 @@ if __name__ == "__main__":
     np.save('res/action2', port_ratios)
 
 
+
 """
     obs = env.reset()
     port_ratios = []
@@ -137,9 +138,10 @@ if __name__ == "__main__":
             break
 
     print("Total profit: %.3f" % sum(infer_rewards))
-    flucation = (max(margins) - min(margins)) / env.initial_amount
-    print('Fluctuation : %.3f' % flucation)
-    print('ER - Fluc = %.3f' % (2 * (last_er - 1) - flucation))
+    fluctuation = (max(margins) - min(margins)) / env.initial_amount
+    print('Fluctuation : %.3f' % fluctuation)
+    mySharpe = (last_er - 1) / np.std(env.rewards)
+    print('Sharpe = %.3f' % mySharpe)
     port_ratios = np.array(port_ratios)
     np.save("res/train_res", port_ratios)
 
@@ -151,7 +153,7 @@ if __name__ == "__main__":
     svps = np.array(svps)
     ax1.set_title('Average Index')
     ax1.plot(infer_steps, sensex_values, label='Index')
-    ax2.set_title('Infer Rewards')
+    ax2.set_title('Infer Rewards (Sharpe = %.3f)' % mySharpe)
     ax2.plot(infer_steps, infer_rewards, color="red", label='Profit')
     ax3.set_title('Overall Position')
     ax3.plot(infer_steps, np.sum(port_ratios, axis=1))
