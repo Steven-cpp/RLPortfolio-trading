@@ -1,46 +1,43 @@
-# MultiStockRLTrading
-Trading multiple stocks using custom gym environment and custom neural network with StableBaselines3.
+# 2022 NTU TradeMaster
 
-This work is part of a series of articles written on medium on Applied RL:
+我报名了一个 quant 的竞赛，给定了15个股票的11个特征，以及 OHLC 中的 close 数据，要求使用 RL 策略计算出最优的投资组合。我的模型是参考了[Applied RL: Custom Gym environment for multi-stock RL based Algo trading](https://medium.com/@akhileshgogikar/custom-gym-environment-for-multi-stock-algo-trading-113b07dd445d#99d4)，我进行了以下修改：
+- 修改了原作者的数据处理流程，使之能够work在竞赛给定的数据集上.
 
-1) Customized Deep Reinforcement Learning for Algorithmic Trading: https://medium.com/@akhileshgogikar/custom-deep-rl-for-algo-trading-106b1a2daa16
+- 同时，增加了`test_step()`定义了测试环境中 RL Agent 的行为.
 
-2) Custom RL for Algo Trading — Data Preprocessing: https://medium.com/@akhileshgogikar/applied-rl-data-preprocessing-for-algo-trading-4478251b9676
+- 增加了绘图函数，将RL Agent的交易策略进行可视化，包括参考指数图、持仓分析图，以及收益率波动图.
 
-3) Custom Gym environment for multi-stock RL based Algo trading: https://medium.com/@akhileshgogikar/custom-gym-environment-for-multi-stock-algo-trading-113b07dd445d
+- 在调优阶段，我还对模型的`step()`进行优化，将 reward 从收益改为夏普比率，综合考虑交易策略的收益性和波动性，力求两者的平衡.
 
-4) Customization of RL policies using StableBaselines3: https://medium.com/@akhileshgogikar/applied-rl-customizing-neural-networks-for-rl-policies-a5a9e2cf763e
+## 1. How to Run this Repo?
 
-5) Advanced deep learning customization of neural networks for RL based Algo trading: https://medium.com/@akhileshgogikar/applied-reinforcement-learning-3e73ca771bac
+本模型的实现主要依赖于 `Pytorch`, `stable baseline3`, `gym`, 并且使用 CPU 也可以进行训练.
 
-# Dependencies
-
-1) Install Conda
-2) If you have a GPU install - Cuda and Cudnn to enable GPU usage 
-
-# Installation
-To install the dependencies in a conda environment by running -> conda env create -f environment.yml
-
-Capsule layer library is installed by -> pip install git+https://github.com/leftthomas/CapsuleLayer.git@master
-
-# Run
-To run the experiments just run -> python train.py
-
-# TensorBoard logs
-You can check out the tensorboard logs by running the following command in a different terminal:
-tensorboard --logdir tb_logs
-
-You will find that not much info is being logged at this moment
+在安装好上述包后，只需要 run `python train.py` 即可.
 
 
-Hi Guys! I have written a series on articles on medium about applying Reinforcement Learning to the Multi-Stock Algorithmic Trading problem. The first article gives an easy overview of the work and subsequent ones go into implementational details. For those of you who are interested the Github Repo with full code and dataset is also made available. The Links below will take you behind the medium paywall. Clap to show some love, leave a comment if you want to share something, if you like the repo please leave a star. Cheers! 
+## 2. Trading Strategy Specification
 
-1) Customized Deep Reinforcement Learning for Algorithmic Trading: https://medium.com/@akhileshgogikar/custom-deep-rl-for-algo-trading-106b1a2daa16?source=friends_link&sk=b06ef1dcd129be2a9dba39fa3b5c246a
+下面对本模型的交易策略进行阐释。我们知道，对于单只股票，算法的 step 就是买入/卖出随机份额的股票。但是，对于多只股票该如何定义每步的操作呢？
 
-2) Custom RL for Algo Trading — Data Preprocessing: https://medium.com/@akhileshgogikar/applied-rl-data-preprocessing-for-algo-trading-4478251b9676?source=friends_link&sk=e52b0d8caa6fd0b1590c8342f7b5932d
+首先看 `action` 是如何定义的:
 
-3) Custom Gym environment for multi-stock RL based Algo trading: https://medium.com/@akhileshgogikar/custom-gym-environment-for-multi-stock-algo-trading-113b07dd445d?source=friends_link&sk=e2dd8f83f3b3d3393db59fa2624d8dde
+```python
+self.action_space = 
+	spaces.Box(low=-1, high=1, shape=(num_stocks,), dtype=np.float32)
 
-4) Customization of RL policies using StableBaselines3: https://medium.com/@akhileshgogikar/applied-rl-customizing-neural-networks-for-rl-policies-a5a9e2cf763e?source=friends_link&sk=f5415c488d17e2a5c7d9aedb2a3af181
+self.observation_space = 
+	spaces.Box(low=-np.inf, high=np.inf, shape=(num_stocks,window_size,num_features), dtype=np.float32)
+```
 
-5) Advanced deep learning customization of neural networks for RL based Algo trading: https://medium.com/@akhileshgogikar/applied-reinforcement-learning-3e73ca771bac?source=friends_link&sk=da6f6459563480f21503b37919b50e2c
+是一个 $num\_stocks$ 维度的向量，每个元素的取值在 $[-1, 1]$ 之间。
+
+在给定了 $n$ 个股票的 action 后，算法会选择前 33% 个权重最高的 (当前模型最自信的) action 执行。具体的买入/卖出金额为 `(action/sum(action)) * margin`. 其中，margin 为当前持有的现金以及持有股票的市值。
+
+> **🔍 如何计算自由多空的证券组合的投资余额？**
+>
+> 由于可以自由做多做空，持有的股票份数可以是负值，负值代表需要归还指定份数的股票。所以在计算账户余额时，应当扣除做空的份额，加上做多的份额。直觉上，可以这么想，如果我们有1000块，这时我们做空了1000块的股票，如果这些股票的市值跌到了 1 块钱，我们只需要买 1 块钱偿还这些股票即可，还剩余 999 块可供投资。反之，如果这些股票涨到了 2000 块，我们就亏损了 1000 块。
+>
+> 所以，在计算投资余额时，只需要简单的 $balance + sum(portfolio * current\_prices)$ 即可.
+
+在执行卖出/买入操作后，更新当前的现金余额 `reserve`，同时计算收益，最后更新所有相关的类变量。
